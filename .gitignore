@@ -6,3 +6,4 @@ dope.sbatch
 sweep.sh
 dmc/rad_sweep.sh
 dmc/rad.sbatch
+MsPacman*/

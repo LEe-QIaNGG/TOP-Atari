@@ -149,6 +149,12 @@ class Actor(nn.Module):
 
         mu, pi, log_pi = squash(mu, pi, log_pi)
 
+        # 将连续动作转换为离散动作
+        if pi is not None:
+            pi = torch.argmax(pi, dim=-1, keepdim=True)
+        if mu is not None:
+            mu = torch.argmax(mu, dim=-1, keepdim=True)
+
         return mu, pi, log_pi, log_std
 
     def log(self, L, step, log_freq=LOG_FREQ):
@@ -193,7 +199,8 @@ class QuantileQFunction(nn.Module):
 
     def forward(self, obs, action):
         assert obs.size(0) == action.size(0)
-
+        if len(action.shape) == 1:
+            action = action.unsqueeze(-1)
         obs_action = torch.cat([obs, action], dim=1)
         return self.trunk(obs_action)
         
@@ -368,8 +375,8 @@ class TOPRadSacAgent(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         # set distributional parameters
-        taus = torch.linspace(
-            0, 1, n_quantiles+1, device=device, dtype=torch.float32)
+        taus = torch.arange(
+            0, n_quantiles+1, device=device, dtype=torch.float32) / n_quantiles
         self.tau_hats = ((taus[1:] + taus[:-1]) / 2.0).view(1, n_quantiles)
         self.n_quantiles = n_quantiles
         self.kappa = kappa
@@ -417,14 +424,16 @@ class TOPRadSacAgent(object):
             mu, _, _, _ = self.actor(
                 obs, compute_pi=False, compute_log_pi=False
             )
-            return mu.cpu().data.numpy().flatten()
+            # 将动作转换为整数
+            return mu.cpu().data.numpy().flatten().astype(np.int32)
 
     def sample_action(self, obs):
         with torch.no_grad():
             obs = torch.FloatTensor(obs).to(self.device)
             obs = obs.unsqueeze(0)
             mu, pi, _, _ = self.actor(obs, compute_log_pi=False)
-            return pi.cpu().data.numpy().flatten()
+            # 将动作转换为整数
+            return pi.cpu().data.numpy().flatten().astype(np.int32)
 
     def update_critic(self, obs, action, reward, next_obs, not_done, L, step, beta):
         with torch.no_grad():

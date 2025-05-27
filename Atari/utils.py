@@ -82,7 +82,7 @@ class ReplayBuffer(Dataset):
         
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
         self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
-        self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
+        self.actions = np.empty((capacity, *action_shape), dtype=np.int32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.not_dones = np.empty((capacity, 1), dtype=np.float32)
 
@@ -96,7 +96,8 @@ class ReplayBuffer(Dataset):
     def add(self, obs, action, reward, next_obs, done):
        
         np.copyto(self.obses[self.idx], obs)
-        np.copyto(self.actions[self.idx], action)
+        # np.copyto(self.actions[self.idx], action)
+        self.actions[self.idx] = action
         np.copyto(self.rewards[self.idx], reward)
         np.copyto(self.next_obses[self.idx], next_obs)
         np.copyto(self.not_dones[self.idx], not done)
@@ -114,7 +115,7 @@ class ReplayBuffer(Dataset):
         next_obses = self.next_obses[idxs]
 
         obses = torch.as_tensor(obses, device=self.device).float()
-        actions = torch.as_tensor(self.actions[idxs], device=self.device)
+        actions = torch.as_tensor(self.actions[idxs], device=self.device).long()
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
         next_obses = torch.as_tensor(
             next_obses, device=self.device
