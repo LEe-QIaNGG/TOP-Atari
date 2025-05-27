@@ -106,20 +106,62 @@ class PixelEncoder(nn.Module):
 
 
 class IdentityEncoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim, num_layers, num_filters,*args):
+    """Encoder for RAM observations."""
+    def __init__(self, obs_shape, feature_dim, num_layers, num_filters, output_logits=False):
         super().__init__()
 
         assert len(obs_shape) == 1
-        self.feature_dim = obs_shape[0]
+        self.obs_shape = obs_shape
+        self.feature_dim = feature_dim
+        self.output_logits = output_logits
+
+        # 添加一个简单的MLP来处理RAM观测
+        self.net = nn.Sequential(
+            nn.Linear(obs_shape[0], feature_dim),
+            nn.LayerNorm(feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, feature_dim),
+            nn.LayerNorm(feature_dim)
+        )
+
+        self.outputs = dict()
 
     def forward(self, obs, detach=False):
-        return obs
+        # 确保输入在正确的范围内
+        if obs.max() > 1.:
+            obs = obs / 255.
+
+        self.outputs['obs'] = obs
+
+        h = self.net(obs)
+        self.outputs['h'] = h
+
+        if detach:
+            h = h.detach()
+
+        if self.output_logits:
+            out = h
+        else:
+            out = torch.tanh(h)
+            self.outputs['tanh'] = out
+
+        return out
 
     def copy_conv_weights_from(self, source):
         pass
 
     def log(self, L, step, log_freq):
-        pass
+        if step % log_freq != 0:
+            return
+
+        for k, v in self.outputs.items():
+            L.log_histogram('train_encoder/%s_hist' % k, v, step)
+
+        for i, layer in enumerate(self.net):
+            if isinstance(layer, nn.Linear):
+                L.log_param('train_encoder/fc%s' % (i + 1), layer, step)
+            elif isinstance(layer, nn.LayerNorm):
+                L.log_param('train_encoder/ln%s' % (i + 1), layer, step)
 
 
 _AVAILABLE_ENCODERS = {'pixel': PixelEncoder, 'identity': IdentityEncoder}
@@ -129,6 +171,13 @@ def make_encoder(
     encoder_type, obs_shape, feature_dim, num_layers, num_filters, output_logits=False
 ):
     assert encoder_type in _AVAILABLE_ENCODERS
+    
+    # 检查观测形状
+    if encoder_type == 'pixel':
+        assert len(obs_shape) == 3, f"Pixel encoder requires 3D observation shape, got {len(obs_shape)}D"
+    else:  # identity encoder
+        assert len(obs_shape) == 1, f"Identity encoder requires 1D observation shape, got {len(obs_shape)}D"
+    
     return _AVAILABLE_ENCODERS[encoder_type](
         obs_shape, feature_dim, num_layers, num_filters, output_logits
     )

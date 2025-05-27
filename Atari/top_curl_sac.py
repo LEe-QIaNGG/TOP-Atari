@@ -100,13 +100,19 @@ class Actor(nn.Module):
             num_filters, output_logits=True
         )
 
+        # 获取动作空间的维度
+        if isinstance(action_shape, tuple):
+            action_dim = action_shape[0] if len(action_shape) > 0 else 1
+        else:
+            action_dim = action_shape
+
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 
         self.trunk = nn.Sequential(
             nn.Linear(self.encoder.feature_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, 2 * action_shape[0])
+            nn.Linear(hidden_dim, 2 * action_dim)
         )
 
         self.outputs = dict()
@@ -200,17 +206,22 @@ class QRCritic(nn.Module):
     ):
         super().__init__()
 
-
         self.encoder = make_encoder(
             encoder_type, obs_shape, encoder_feature_dim, num_layers,
             num_filters, output_logits=True
         )
 
+        # 获取动作空间的维度
+        if isinstance(action_shape, tuple):
+            action_dim = action_shape[0] if len(action_shape) > 0 else 1
+        else:
+            action_dim = action_shape
+
         self.Q1 = QuantileQFunction(
-            self.encoder.feature_dim, action_shape[0], hidden_dim, n_quantiles
+            self.encoder.feature_dim, action_dim, hidden_dim, n_quantiles
         )
         self.Q2 = QuantileQFunction(
-            self.encoder.feature_dim, action_shape[0], hidden_dim, n_quantiles
+            self.encoder.feature_dim, action_dim, hidden_dim, n_quantiles
         )
 
         self.outputs = dict()
@@ -311,8 +322,8 @@ class TOPRadSacAgent(object):
         critic_beta=0.9,
         critic_tau=0.005,
         critic_target_update_freq=2,
-        encoder_type='pixel',
-        encoder_feature_dim=50,
+        encoder_type='identity',
+        encoder_feature_dim=128,
         encoder_lr=1e-3,
         encoder_tau=0.005,
         num_layers=4,
@@ -334,30 +345,9 @@ class TOPRadSacAgent(object):
         self.critic_target_update_freq = critic_target_update_freq
         self.cpc_update_freq = cpc_update_freq
         self.log_interval = log_interval
-        self.image_size = obs_shape[-1]
-        self.latent_dim = latent_dim
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
         self.data_augs = data_augs
-
-        self.augs_funcs = {}
-
-        aug_to_func = {
-                'crop':rad.random_crop,
-                'grayscale':rad.random_grayscale,
-                'cutout':rad.random_cutout,
-                'cutout_color':rad.random_cutout_color,
-                'flip':rad.random_flip,
-                'rotate':rad.random_rotation,
-                'rand_conv':rad.random_convolution,
-                'color_jitter':rad.random_color_jitter,
-                'translate':rad.random_translate,
-                'no_aug':rad.no_aug,
-            }
-
-        for aug_name in self.data_augs.split('-'):
-            assert aug_name in aug_to_func, 'invalid data aug string'
-            self.augs_funcs[aug_name] = aug_to_func[aug_name]
 
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,
@@ -378,8 +368,8 @@ class TOPRadSacAgent(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         # set distributional parameters
-        taus = torch.arange(
-            0, n_quantiles+1, device=device, dtype=torch.float32) / n_quantiles
+        taus = torch.linspace(
+            0, 1, n_quantiles+1, device=device, dtype=torch.float32)
         self.tau_hats = ((taus[1:] + taus[:-1]) / 2.0).view(1, n_quantiles)
         self.n_quantiles = n_quantiles
         self.kappa = kappa
@@ -387,7 +377,7 @@ class TOPRadSacAgent(object):
         # bandit top-down controller
         self.TDC = ExpWeights(arms=[-1, 0], lr=bandit_lr, init=0.01, use_std=True) 
 
-        # tie encoders between actor and critic, and CURL and critic
+        # tie encoders between actor and critic
         self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
@@ -408,21 +398,6 @@ class TOPRadSacAgent(object):
             [self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999)
         )
 
-        if self.encoder_type == 'pixel':
-            # create CURL encoder (the 128 batch size is probably unnecessary)
-            self.CURL = CURL(obs_shape, encoder_feature_dim,
-                        self.latent_dim, self.critic,self.critic_target, output_type='continuous').to(self.device)
-
-            # optimizer for critic encoder for reconstruction loss
-            self.encoder_optimizer = torch.optim.Adam(
-                self.critic.encoder.parameters(), lr=encoder_lr
-            )
-
-            self.cpc_optimizer = torch.optim.Adam(
-                self.CURL.parameters(), lr=encoder_lr
-            )
-        self.cross_entropy_loss = nn.CrossEntropyLoss()
-
         self.train()
         self.critic_target.train()
 
@@ -430,8 +405,6 @@ class TOPRadSacAgent(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
-        if self.encoder_type == 'pixel':
-            self.CURL.train(training)
 
     @property
     def alpha(self):
@@ -447,9 +420,6 @@ class TOPRadSacAgent(object):
             return mu.cpu().data.numpy().flatten()
 
     def sample_action(self, obs):
-        if obs.shape[-1] != self.image_size:
-            obs = utils.center_crop_image(obs, self.image_size)
- 
         with torch.no_grad():
             obs = torch.FloatTensor(obs).to(self.device)
             obs = obs.unsqueeze(0)
@@ -563,10 +533,7 @@ class TOPRadSacAgent(object):
 
 
     def update(self, replay_buffer, L, step, beta):
-        if self.encoder_type == 'pixel':
-            obs, action, reward, next_obs, not_done = replay_buffer.sample_rad(self.augs_funcs)
-        else:
-            obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
+        obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
     
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
@@ -594,11 +561,6 @@ class TOPRadSacAgent(object):
         )
         torch.save(
             self.critic.state_dict(), '%s/critic_%s.pt' % (model_dir, step)
-        )
-
-    def save_curl(self, model_dir, step):
-        torch.save(
-            self.CURL.state_dict(), '%s/curl_%s.pt' % (model_dir, step)
         )
 
     def load(self, model_dir, step):

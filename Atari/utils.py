@@ -7,7 +7,7 @@ from collections import deque
 import random
 from torch.utils.data import Dataset, DataLoader
 import time
-from skimage.util.shape import view_as_windows
+# from skimage.util.shape import view_as_windows
 
 class eval_mode(object):
     def __init__(self, *models):
