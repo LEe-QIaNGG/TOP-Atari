@@ -3,7 +3,8 @@ import itertools
 import os
 import random
 
-from moviepy.editor import ImageSequenceClip
+# from moviepy.editor import ImageSequenceClip
+import moviepy
 import numpy as np
 import torch
 from typing import List
@@ -97,7 +98,7 @@ def make_gif(policy, env, step_count, state_filter, maxsteps=1000, name=None):
         rewards.append(reward)
         t +=1
     print('Final reward :', np.sum(rewards))
-    clip = ImageSequenceClip(steps, fps=30)
+    clip = moviepy.video.io.ImageSequenceClip(steps, fps=30)
     if not os.path.isdir('gifs'):
         os.makedirs('gifs')
     clip.write_gif('gifs/{}.gif'.format(gif_name), fps=30)

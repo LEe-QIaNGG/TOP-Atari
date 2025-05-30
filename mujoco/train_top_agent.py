@@ -12,13 +12,12 @@ from typing import Dict, Callable
 from top import TOP_Agent
 from utils import MeanStdevFilter, Transition, make_gif, make_checkpoint
 
-GYM_ENV = gym.wrappers.time_limit.TimeLimit
 
 def create_atari_env(env_name):
     env = gym.make(env_name)
     return env
 
-def train_agent_model_free(agent: TOP_Agent, env: GYM_ENV, params: Dict) -> None:
+def train_agent_model_free(agent: TOP_Agent, env, params: Dict) -> None:
     
     update_timestep = params['update_every_n_steps']
     seed = params['seed']
@@ -137,7 +136,7 @@ def train_agent_model_free(agent: TOP_Agent, env: GYM_ENV, params: Dict) -> None
 
 
 def evaluate_agent(
-    env: GYM_ENV,
+    env,
     agent: TOP_Agent,
     state_filter: Callable,
     n_starts: int = 1) -> float:
