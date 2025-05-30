@@ -3,7 +3,6 @@ from argparse import ArgumentParser
 from collections import deque
 
 import gym
-from gym.wrappers import RescaleAction
 import numpy as np
 import torch
 import pdb
@@ -13,9 +12,12 @@ from typing import Dict, Callable
 from top import TOP_Agent
 from utils import MeanStdevFilter, Transition, make_gif, make_checkpoint
 
-GYM_ENV = gym.wrappers.time_limit.TimeLimit
 
-def train_agent_model_free(agent: DOPE_Agent, env: GYM_ENV, params: Dict) -> None:
+def create_atari_env(env_name):
+    env = gym.make(env_name)
+    return env
+
+def train_agent_model_free(agent: TOP_Agent, env, params: Dict) -> None:
     
     update_timestep = params['update_every_n_steps']
     seed = params['seed']
@@ -41,7 +43,7 @@ def train_agent_model_free(agent: DOPE_Agent, env: GYM_ENV, params: Dict) -> Non
     episode_steps = []
 
     if use_statefilter:
-        state_filter = MeanStdevFilter(env.env.observation_space.shape[0])
+        state_filter = MeanStdevFilter(env.observation_space.shape[0])
     else:
         state_filter = None
 
@@ -53,8 +55,8 @@ def train_agent_model_free(agent: DOPE_Agent, env: GYM_ENV, params: Dict) -> Non
 
     max_steps = env.spec.max_episode_steps
 
-    com = f"DOPE_{params['env']}_nq{params['n_quantiles']}_{params['bandit_lr']}_seed{seed}"
-    writer = SummaryWriter(log_dir='dope_runs/' + com)
+    com = f"TOP_{params['env']}_nq{params['n_quantiles']}_{params['bandit_lr']}_seed{seed}"
+    writer = SummaryWriter(log_dir='top_runs/' + com)
 
     prev_episode_reward = 0
     while samples_number < 1e6:
@@ -80,9 +82,9 @@ def train_agent_model_free(agent: DOPE_Agent, env: GYM_ENV, params: Dict) -> Non
             else:
                 action = agent.get_action(state, state_filter=state_filter)
             
-            nextstate, reward, done, _ = env.step(action)
-            # if we hit the time-limit, it's not a 'real' done; we don't want to assign low value to those states
-            real_done = False if time_step == max_steps else done
+            nextstate, reward, done, info = env.step(action)
+            # 对于Atari环境，我们使用life loss作为real_done的判断
+            real_done = done and not info.get('ale.lives', 0) > 0
             agent.replay_pool.push(Transition(state, action, reward, nextstate, real_done))
             state = nextstate
             if state_filter:
@@ -134,8 +136,8 @@ def train_agent_model_free(agent: DOPE_Agent, env: GYM_ENV, params: Dict) -> Non
 
 
 def evaluate_agent(
-    env: GYM_ENV,
-    agent: DOPE_Agent,
+    env,
+    agent: TOP_Agent,
     state_filter: Callable,
     n_starts: int = 1) -> float:
     
@@ -154,7 +156,7 @@ def evaluate_agent(
 def main():
     
     parser = ArgumentParser()
-    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
+    parser.add_argument('--env', type=str, default='MsPacman-ram-v4')
     parser.add_argument('--seed', type=int, default=100)
     parser.add_argument('--use_obs_filter', dest='obs_filter', action='store_true')
     parser.add_argument('--update_every_n_steps', type=int, default=1)
@@ -171,14 +173,13 @@ def main():
     params = vars(args)
 
     seed = params['seed']
-    env = gym.make(params['env'])
-    env = RescaleAction(env, -1, 1)
+    env = create_atari_env(params['env'])
 
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
+    state_dim = env.observation_space.shape[0]  # RAM observation space
+    action_dim = env.action_space.n  # Discrete action space for Atari
 
     # initialize agent
-    agent = DOPE_Agent(seed, state_dim, action_dim, \
+    agent = TOP_Agent(seed, state_dim, action_dim, \
         n_quantiles=params['n_quantiles'], bandit_lr=params['bandit_lr'])
 
     # train agent 
